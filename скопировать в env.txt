@@ -1,0 +1,8 @@
+# GigaChat credentials (obtain from https://developers. sber.ru/gigachat)
+GIGACHAT_CLIENT_ID=019feafc-c8d0-7b1c-bff7-cbca476a8b89
+GIGACHAT_CLIENT_SECRET=1639ca01-738d-4368-b6f5-e8bae8f62ef0
+GIGACHAT_SCOPE=GIGACHAT_API_PERS
+#AUTHORIZATION_KEY=MDE5ZmVhZmMtYzhkMC03YjFjLWJmZjctY2JjYTQ3NmE4Yjg5OjE2MzljYTAxLTczOGQtNDM2OC1iNmY1LWU4YmFlOGY2MmVmMA==
+# Server settings
+HOST=0.0.0.0
+PORT=8000
