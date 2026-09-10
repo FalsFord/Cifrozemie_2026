@@ -11,6 +11,11 @@ try:
 except Exception:
     PdfReader = None
 
+try:
+    import fitz  # PyMuPDF
+except Exception:
+    fitz = None
+
 
 CATALOG_CATEGORIES = [
     "ФИО директора, подписантов и ответственных сотрудников",
@@ -299,6 +304,92 @@ class GigaChatService:
         if lower.endswith(".docx"):
             return self.extract_docx_text(file_path)
         return ""
+
+    def find_regions_in_pdf(
+        self,
+        file_path: str,
+        categories: dict[str, list[str]],
+        min_value_length: int = 2,
+    ) -> list[dict]:
+        """Locate bounding boxes for previously extracted category values.
+
+        GigaChat only returns text values, never coordinates - it never
+        sees the PDF layout. To get pixel/point coordinates we open the
+        same PDF locally with PyMuPDF and search for each value's exact
+        text on every page. Coordinates are returned in PDF points
+        (1/72 inch), in the PDF's native top-left-origin page space, which
+        is what most PDF viewers and redaction tools expect.
+
+        Returns a flat list of dicts, one per found occurrence:
+            {
+                "category": str,
+                "value": str,
+                "page": int,        # 1-indexed
+                "x": float,         # left, in points
+                "y": float,         # top, in points
+                "width": float,
+                "height": float,
+            }
+
+        Values that are empty, too short, or not found in the text layer
+        (e.g. the PDF is a scanned image, or GigaChat slightly reworded a
+        value) are silently skipped rather than raising - this endpoint
+        should degrade gracefully instead of failing the whole request.
+        """
+        regions: list[dict] = []
+
+        if fitz is None:
+            return regions
+        if not file_path.lower().endswith(".pdf"):
+            # DOCX has no fixed page geometry; coordinates don't apply.
+            return regions
+
+        try:
+            doc = fitz.open(file_path)
+        except Exception:
+            return regions
+
+        try:
+            seen: set[tuple] = set()
+            for category, values in categories.items():
+                for raw_value in values:
+                    value = (raw_value or "").strip().strip('"').strip()
+                    if len(value) < min_value_length:
+                        continue
+
+                    for page_index in range(len(doc)):
+                        page = doc[page_index]
+                        try:
+                            rects = page.search_for(value, quads=False)
+                        except Exception:
+                            rects = []
+
+                        for rect in rects:
+                            key = (
+                                category,
+                                value,
+                                page_index,
+                                round(rect.x0, 1),
+                                round(rect.y0, 1),
+                            )
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            regions.append(
+                                {
+                                    "category": category,
+                                    "value": value,
+                                    "page": page_index + 1,
+                                    "x": round(rect.x0, 2),
+                                    "y": round(rect.y0, 2),
+                                    "width": round(rect.x1 - rect.x0, 2),
+                                    "height": round(rect.y1 - rect.y0, 2),
+                                }
+                            )
+        finally:
+            doc.close()
+
+        return regions
 
     async def chat_from_pdf(self, file_path: str) -> str:
         """Read text from uploaded PDF or DOCX and send it to GigaChat with a

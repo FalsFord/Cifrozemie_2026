@@ -2,7 +2,12 @@ import json
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from config import settings
 from services.gigachat import GigaChatService
-from schemas.request import QuestionRequest, QuestionResponse, CategoriesExtractionResponse
+from schemas.request import (
+    QuestionRequest,
+    QuestionResponse,
+    CategoriesExtractionResponse,
+    WordRegion,
+)
 from local_llm.example_llm import call_local_llm as call_llm
 
 
@@ -90,7 +95,16 @@ async def extract_pdf_from_file(
         except Exception:
             parsed = {}
 
-        return CategoriesExtractionResponse(categories=parsed)
+        # Locate bounding boxes for every extracted value inside the PDF.
+        # Only meaningful for .pdf uploads; returns [] for .docx or if the
+        # value can't be located (e.g. scanned/image-only PDF).
+        try:
+            raw_regions = gigachat_service.find_regions_in_pdf(file_path, parsed)
+        except Exception:
+            raw_regions = []
+        regions = [WordRegion(**region) for region in raw_regions]
+
+        return CategoriesExtractionResponse(categories=parsed, regions=regions)
     except HTTPException:
         raise
     except Exception as exc:
