@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+import json
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from config import settings
 from services.gigachat import GigaChatService
-from schemas.request import QuestionRequest, QuestionResponse
+from schemas.request import QuestionRequest, QuestionResponse, CategoriesExtractionResponse
 from local_llm.example_llm import call_local_llm as call_llm
 
 
@@ -39,7 +40,63 @@ async def ask_question(request: QuestionRequest):
             answer = await call_llm(request.message)
         else:
             raise
-    except Exception as e:
+    except Exception:
         answer = await call_llm(request.message)
-        #raise HTTPException(status_code=500, detail=f"GigaChat error: {e}")
     return QuestionResponse(message=answer)
+
+
+@router.post("/extract-pdf", response_model=CategoriesExtractionResponse)
+async def extract_pdf_from_file(
+    file: UploadFile = File(...),
+):
+    """Accept a PDF or Word (.docx) file, parse the text locally, send a
+    category prompt to GigaChat, and return a structured JSON object mapping
+    each category to an array of extracted values.
+
+    The contract is intentionally universal: any supported document should
+    produce the same category vocabulary and schema.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="File name is required.")
+
+    filename = file.filename.lower()
+    if filename.endswith(".pdf"):
+        suffix = ".pdf"
+    elif filename.endswith(".docx"):
+        suffix = ".docx"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF and DOCX files are supported.",
+        )
+
+    import tempfile
+    import os
+
+    tmp_path = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp_path.close()
+    file_path = tmp_path.name
+
+    try:
+        content = await file.read()
+        with open(file_path, "wb") as tmp:
+            tmp.write(content)
+
+        answer = await gigachat_service.chat_from_pdf(file_path)
+
+        # Normalize route response to a real structured categories object.
+        try:
+            parsed = gigachat_service.normalize_categories_payload(answer)
+        except Exception:
+            parsed = {}
+
+        return CategoriesExtractionResponse(categories=parsed)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        try:
+            os.unlink(file_path)
+        except Exception:
+            pass

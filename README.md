@@ -4,10 +4,11 @@
 
 ## endpoints
 
-| Method | Path        | Description               |
-|--------|-------------|---------------------------|
-| GET    | `/health`   | Проверка статуса сервиса  |
-| POST   | `/question` | Отправить вопрос GigaChat |
+| Method | Path            | Description                                  |
+|--------|-----------------|----------------------------------------------|
+| GET    | `/health`       | Проверка статуса сервиса                     |
+| POST   | `/question`     | Отправить вопрос GigaChat                    |
+| POST   | `/extract-pdf`  | Загрузить PDF/DOCX-документ и вернуть JSON-ответ |
 
 ## Быстрый старт
 
@@ -42,6 +43,20 @@ curl -X POST http://localhost:8000/question \
   -H "Content-Type: application/json" \
   -d '{"message":"Привет, как дела?"}'
 # {"message":"Привет! Я GigaChat — искусственный интеллект..."}
+```
+
+### Загрузить документ и запросить извлечение JSON
+```bash
+curl -X POST http://localhost:8000/extract-pdf \
+  -F "file=@Dogovor.pdf;type=application/pdf"
+# {"categories":{...}}
+```
+
+Word документ тоже поддерживается через тот же маршрут:
+```bash
+curl -X POST http://localhost:8000/extract-pdf \
+  -F "file=@Dogovor.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# {"categories":{...}}
 ```
 
 ## Переменные окружения
