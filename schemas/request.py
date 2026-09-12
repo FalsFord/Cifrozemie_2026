@@ -54,11 +54,22 @@ class CategoriesExtractionResponse(BaseModel):
 
     categories: Dict[str, List[str]] = Field(
         default_factory=dict,
-        description="Mapping category -> extracted values from the PDF.",
+        description="Mapping category -> extracted values from the PDF (requisites, contacts, IDs, etc).",
+    )
+    analytics: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Аналитика по договору: прямые (дословные) цитаты из документа по "
+            "категориям — условия оплаты (аванс, процент, сумма, сроки "
+            "перечисления), упоминания только 223-ФЗ/44-ФЗ/275-ФЗ, порядок "
+            "расторжения договора, гарантийные обязательства, условия приёмки "
+            "товара или услуг. Отделено от 'categories', так как эти значения "
+            "являются цитатами, а не отдельными реквизитами."
+        ),
     )
     regions: List[WordRegion] = Field(
         default_factory=list,
-        description="Bounding boxes of extracted values found in the PDF.",
+        description="Bounding boxes of extracted values found in the PDF (covers both categories and analytics values).",
     )
 
 

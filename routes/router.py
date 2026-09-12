@@ -95,16 +95,19 @@ async def extract_pdf_from_file(
         except Exception:
             parsed = {}
 
-        # Locate bounding boxes for every extracted value inside the PDF.
-        # Only meaningful for .pdf uploads; returns [] for .docx or if the
-        # value can't be located (e.g. scanned/image-only PDF).
+        categories, analytics = gigachat_service.split_categories(parsed)
+
         try:
             raw_regions = gigachat_service.find_regions_in_pdf(file_path, parsed)
         except Exception:
             raw_regions = []
         regions = [WordRegion(**region) for region in raw_regions]
 
-        return CategoriesExtractionResponse(categories=parsed, regions=regions)
+        return CategoriesExtractionResponse(
+            categories=categories,
+            analytics=analytics,
+            regions=regions,
+        )
     except HTTPException:
         raise
     except Exception as exc:

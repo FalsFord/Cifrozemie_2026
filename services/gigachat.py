@@ -1,5 +1,3 @@
-"""GigaChat API client with token-based authentication."""
-
 import httpx
 import uuid
 import json
@@ -35,9 +33,40 @@ CATALOG_CATEGORIES = [
     "Даты заключения договора",
 ]
 
+# "Аналитика по договору" — для этих категорий модель обязана возвращать
+# только прямые (дословные) цитаты из документа, а не реквизиты/слова.
+ANALYTICS_CATEGORIES = [
+    "Условия оплаты: аванс, процент, сумма, сроки перечисления",
+    "Упоминания федеральных законов (только 223-ФЗ, 44-ФЗ, 275-ФЗ)",
+    "Порядок расторжения договора",
+    "Гарантийные обязательства",
+    "Условия приёмки товара или услуг",
+]
+
+CATALOG_CATEGORIES = CATALOG_CATEGORIES + ANALYTICS_CATEGORIES
+
 
 class GigaChatService:
     """Handles authentication and chat requests to GigaChat API."""
+
+    # Exposed so callers (e.g. the router) don't need to import the module
+    # global directly.
+    ANALYTICS_CATEGORIES = ANALYTICS_CATEGORIES
+
+    @staticmethod
+    def split_categories(
+        payload: dict[str, list[str]],
+    ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        """Split a flat category -> values mapping into two groups.
+
+        Returns a tuple of ``(requisites, analytics)`` where ``analytics``
+        contains only the "Аналитика по договору" categories (payment
+        terms, 223-ФЗ/44-ФЗ/275-ФЗ mentions, termination, warranty,
+        acceptance) and ``requisites`` contains everything else.
+        """
+        analytics = {k: v for k, v in payload.items() if k in ANALYTICS_CATEGORIES}
+        requisites = {k: v for k, v in payload.items() if k not in ANALYTICS_CATEGORIES}
+        return requisites, analytics
 
     @staticmethod
     def normalize_categories_payload(answer: str) -> dict[str, list[str]]:
@@ -139,23 +168,47 @@ class GigaChatService:
         The model is instructed to locate words from the contract categories
         and return a JSON answer without free prose.
         """
-        categories = "\n".join(f"- {item}" for item in CATALOG_CATEGORIES)
+        base_categories = "\n".join(
+            f"- {item}" for item in CATALOG_CATEGORIES if item not in ANALYTICS_CATEGORIES
+        )
+        analytics_categories = "\n".join(f"- {item}" for item in ANALYTICS_CATEGORIES)
+
         instruction = (
-            "Найди в этом PDF-документе все слова и фразы, относящиеся к "
-            "следующим категориям, и верни их строго в формате JSON. "
-            "Не пиши описание, не добавляй текст вне JSON. "
+            "Найди в этом документе информацию по категориям ниже и верни её "
+            "строго в формате JSON. Не пиши описание, не добавляй текст вне JSON. "
             "Структура ответа должна быть: "
             "{\"categories\": {\"<категория>\": [\"значения\"]}}. "
-            "Если категория отсутствует, верни пустой список. "
-            "Сохраняй исходные словоформы и реквизиты из документа. "
-            "Не объясняй, не дополняй и не исправляй текст. "
-            "Верни только JSON."
+            "Если категория отсутствует в документе, верни для неё пустой список. "
+            "Не объясняй, не дополняй и не исправляй текст.\n\n"
+            "БЛОК 1 — реквизиты и персональные данные. Извлекай отдельные слова, "
+            "реквизиты и короткие значения в исходной словоформе, как они "
+            "встречаются в документе.\n\n"
+            "БЛОК 2 — «Аналитика по договору». Для каждой категории этого блока "
+            "извлекай ТОЛЬКО ПРЯМЫЕ ЦИТАТЫ — дословные фрагменты текста документа "
+            "(полное предложение или пункт договора целиком), без перефразирования, "
+            "сокращения, обобщения или добавления собственных слов. Каждая цитата — "
+            "отдельный элемент списка, текст внутри цитаты должен точно совпадать с "
+            "документом.\n"
+            "— Для категории «Условия оплаты» цитируй пункты, где указаны аванс, "
+            "процент оплаты, сумма и сроки перечисления денежных средств.\n"
+            "— Для категории про федеральные законы цитируй пункты ТОЛЬКО с "
+            "упоминанием 223-ФЗ, 44-ФЗ или 275-ФЗ. Любые другие законы, кодексы, "
+            "статьи и номера ФЗ (кроме этих трёх) полностью игнорируй и не включай "
+            "в ответ, даже если они упомянуты рядом.\n"
+            "— Для категории «Порядок расторжения договора» цитируй пункты об "
+            "условиях, основаниях и порядке расторжения.\n"
+            "— Для категории «Гарантийные обязательства» цитируй пункты о "
+            "гарантийном сроке и обязательствах сторон по гарантии.\n"
+            "— Для категории «Условия приёмки товара или услуг» цитируй пункты о "
+            "порядке, сроках и условиях приёмки.\n\n"
+            f"БЛОК 1:\n{base_categories}\n\n"
+            f"БЛОК 2 (только прямые цитаты):\n{analytics_categories}"
         )
         # The extra_message field is deliberately ignored as a source of
         # semantic drift. The category list from the code is the only truth.
         if extra_message:
             instruction += " "
-        return f"{instruction}\nКатегории:\n{categories}"
+        return instruction
 
     def local_category_extraction(self, pdf_text: str) -> dict[str, list[str]]:
         """Fallback local PDF-text parser that extracts any visible values
@@ -215,6 +268,50 @@ class GigaChatService:
         org_names = sorted(set(re.findall(r'"[^"]+"', text_for_case)))
         if org_names:
             result["Полное и сокращённое наименование учреждения"] += org_names[:10]
+
+        # --- Аналитика по договору: только дословные цитаты (целые пункты/
+        # предложения), найденные по ключевым словам. Это резервный путь,
+        # используемый только если GigaChat недоступен или вернул пустой ответ.
+        def sentences_with_keywords(source_text: str, keywords: list[str]) -> list[str]:
+            # Split roughly by sentence/clause terminators used in contracts
+            # (also treats numbered clauses like "5.1." as natural breaks).
+            chunks = re.split(r"(?<=[.!?;])\s+|\n+", source_text)
+            found = []
+            for chunk in chunks:
+                clean = chunk.strip()
+                if not clean:
+                    continue
+                low = clean.lower()
+                if any(kw in low for kw in keywords):
+                    found.append(clean)
+            return sorted(set(found))
+
+        result["Условия оплаты: аванс, процент, сумма, сроки перечисления"] = (
+            sentences_with_keywords(
+                text,
+                ["аванс", "предоплат", "оплат", "перечисл", "процент"],
+            )
+        )
+
+        # Only exact 223-FZ / 44-FZ / 275-FZ mentions — any other law/number
+        # combination is deliberately excluded, per the extraction contract.
+        fz_pattern = re.compile(r"\b(223|44|275)[\s\-]*фз\b", re.IGNORECASE)
+        fz_quotes = []
+        for chunk in re.split(r"(?<=[.!?;])\s+|\n+", text):
+            clean = chunk.strip()
+            if clean and fz_pattern.search(clean):
+                fz_quotes.append(clean)
+        result["Упоминания федеральных законов (только 223-ФЗ, 44-ФЗ, 275-ФЗ)"] = sorted(set(fz_quotes))
+
+        result["Порядок расторжения договора"] = sentences_with_keywords(
+            text, ["расторж"]
+        )
+        result["Гарантийные обязательства"] = sentences_with_keywords(
+            text, ["гаранти"]
+        )
+        result["Условия приёмки товара или услуг"] = sentences_with_keywords(
+            text, ["приём", "приемк", "приёмк", "приемочн", "приёмочн"]
+        )
 
         return {k: sorted(set(v)) for k, v in result.items()}
 
@@ -463,4 +560,3 @@ class GigaChatService:
             return True
         except Exception:
             return False
-
