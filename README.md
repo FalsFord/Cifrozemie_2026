@@ -1,67 +1,190 @@
-# GigaChat API — FastAPI Service
+# 🤖 GigaChat API — FastAPI Service
 
-Сервис для взаимодействия с нейросетью GigaChat через REST API.
+Лёгкий REST-сервис на **FastAPI**, который проксирует запросы к нейросети
+**GigaChat** (Сбер) и умеет извлекать структурированные данные из
+загруженных PDF/DOCX-документов — с автоматическим fallback на локальный
+парсер, если GigaChat недоступен.
 
-## endpoints
+<p>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-blue">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115%2B-009688">
+  <img alt="License" src="https://img.shields.io/badge/license-proprietary-lightgrey">
+</p>
 
-| Method | Path            | Description                                  |
-|--------|-----------------|----------------------------------------------|
-| GET    | `/health`       | Проверка статуса сервиса                     |
-| POST   | `/question`     | Отправить вопрос GigaChat                    |
-| POST   | `/extract-pdf`  | Загрузить PDF/DOCX-документ и вернуть JSON-ответ |
+\---
 
-## Быстрый старт
+## 📑 Содержание
+
+* [Возможности](#-возможности)
+* [Архитектура](#-архитектура)
+* [Структура проекта](#-структура-проекта)
+* [Быстрый старт](#-быстрый-старт)
+* [Переменные окружения](#-переменные-окружения)
+* [API](#-api)
+
+  * [GET /health](#get-health)
+  * [POST /question](#post-question)
+  * [POST /extract-pdf](#post-extract-pdf)
+* [Формат ответа /extract-pdf](#-формат-ответа-extract-pdf)
+* [Как получить credentials GigaChat](#-как-получить-credentials-gigachat)
+* [Разработка](#-разработка)
+
+\---
+
+## ✨ Возможности
+
+* 💬 **Чат с GigaChat** — прямой проксирующий эндпоинт `/question`.
+* 📄 **Извлечение данных из документов** — загрузка PDF/DOCX и получение
+строго структурированного JSON по фиксированному набору категорий
+(реквизиты, ФИО, ИНН, банковские данные и т.д.).
+* 📊 **Аналитика по договору** — отдельный блок с дословными цитатами
+по условиям оплаты, расторжению, гарантии, приёмке и упоминаниям
+223-ФЗ / 44-ФЗ / 275-ФЗ.
+* 📍 **Координаты на странице** — для PDF сервис возвращает `regions`:
+bounding box каждого найденного значения (через PyMuPDF), удобно для
+визуальной подсветки/редактирования в PDF-вьюере.
+* 🛟 **Локальный fallback** — если GigaChat недоступен или вернул
+неожиданный ответ, включается regex-эвристика, которая всё равно
+наполняет ответ (сервис никогда не падает в пустой JSON).
+* 🔐 **OAuth-кэширование токена** — токен GigaChat запрашивается один раз
+и переиспользуется до истечения срока действия.
+
+## 🏗 Архитектура
+
+```
+Клиент
+  │
+  │  POST /extract-pdf (файл)
+  ▼
+FastAPI router (routes/router.py)
+  │
+  ├─► services/gigachat.py ─── извлечение текста (pypdf / docx)
+  │         │
+  │         ├─► GigaChat API (OAuth + chat/completions)
+  │         │        │
+  │         │        └─ при ошибке ─► local\_llm/example\_llm.py (fallback)
+  │         │
+  │         └─► PyMuPDF ─── поиск координат значений на странице
+  │
+  └─► schemas/request.py ─── валидация запроса/ответа (Pydantic)
+```
+
+## 📂 Структура проекта
+
+```
+.
+├── main.py                 # Точка входа: создаёт FastAPI-приложение
+├── config.py                # Настройки из .env (pydantic-settings)
+├── routes/
+│   └── router.py            # /health, /question, /extract-pdf
+├── services/
+│   └── gigachat.py           # Клиент GigaChat + извлечение категорий
+├── schemas/
+│   └── request.py            # Pydantic-модели запросов/ответов
+├── local\_llm/
+│   └── example\_llm.py        # Заглушка локальной модели (fallback)
+├── requirements.txt
+└── pyproject.toml
+```
+
+## 🚀 Быстрый старт
 
 ```bash
-# 1. Создай виртуальное окружение
+# 1. Создать виртуальное окружение
 python -m venv venv
-venv\Scripts\activate        # Windows
+venv\\Scripts\\activate        # Windows
 source venv/bin/activate     # Linux / macOS
 
-# 2. Установи зависимости
+# 2. Установить зависимости
 pip install -r requirements.txt
 
-# 3. Скопируй .env → .env и заполни свои credentials
-copy .env .env       # Windows
-cp .env .env         # Linux / macOS
+# 3. Настроить переменные окружения
+cp .env.example .env         # Linux / macOS
+copy .env.example .env       # Windows
+# затем впишите свои GIGACHAT\_CLIENT\_ID / GIGACHAT\_CLIENT\_SECRET
 
-# 4. Запусти сервер
+# 4. Запустить сервер
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Примеры запросов
+После запуска интерактивная документация доступна на:
+**http://localhost:8000/docs** (Swagger UI).
 
-### Health check
+> ⚠️ \*\*Важно:\*\* не храните реальные `client\_id` / `client\_secret` как
+> значения по умолчанию в `config.py` — используйте только `.env`,
+> который не должен попадать в git (см. `.gitignore`).
+
+## ⚙️ Переменные окружения
+
+|Переменная|Описание|По умолчанию|
+|-|-|-|
+|`GIGACHAT\_CLIENT\_ID`|ID клиента из кабинета разработчика|*(обязательно)*|
+|`GIGACHAT\_CLIENT\_SECRET`|Секретный ключ клиента|*(обязательно)*|
+|`GIGACHAT\_SCOPE`|OAuth scope|`GIGACHAT\_API\_PERS`|
+|`HOST`|Адрес привязки сервера|`0.0.0.0`|
+|`PORT`|Порт сервера|`8000`|
+
+## 📡 API
+
+### `GET /health`
+
+Проверка живости сервиса.
+
 ```bash
 curl http://localhost:8000/health
-# {"status":"ok"}
 ```
 
-### Отправить вопрос
-```bash
-curl -X POST http://localhost:8000/question \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Привет, как дела?"}'
-# {"message":"Привет! Я GigaChat — искусственный интеллект..."}
+```json
+{"status": "ok"}
 ```
 
-### Загрузить документ и запросить извлечение JSON
+### `POST /question`
+
+Отправить произвольный текст в GigaChat и получить ответ. При ошибке
+GigaChat автоматически используется локальный fallback (`local\_llm`).
+
 ```bash
-curl -X POST http://localhost:8000/extract-pdf \
+curl -X POST http://localhost:8000/question \\
+  -H "Content-Type: application/json" \\
+  -d '{"message": "Привет, как дела?"}'
+```
+
+```json
+{"message": "Привет! Я GigaChat — искусственный интеллект..."}
+```
+
+### `POST /extract-pdf`
+
+Загрузить PDF или DOCX и получить структурированные категории +
+аналитику + координаты значений на странице.
+
+```bash
+curl -X POST http://localhost:8000/extract-pdf \\
   -F "file=@Dogovor.pdf;type=application/pdf"
 ```
 
-Ответ содержит категории (как и раньше) плюс `regions` — координаты каждого
-найденного значения на странице PDF (в points, 1/72 дюйма, начало координат
-в левом верхнем углу страницы — как в PyMuPDF/pdf.js):
+DOCX поддерживается тем же маршрутом (без `regions`, т.к. у формата нет
+фиксированной геометрии страниц):
+
+```bash
+curl -X POST http://localhost:8000/extract-pdf \\
+  -F "file=@Dogovor.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+```
+
+## 📦 Формат ответа `/extract-pdf`
 
 ```json
 {
   "categories": {
-    "ФИО директора, подписантов и ответственных сотрудников": ["Иванов И.И."],
-    "ИНН, КПП и идентификационный код заказчика": ["7701234567"]
+    "ФИО директора, подписантов и ответственных сотрудников": \["Иванов И.И."],
+    "ИНН, КПП и идентификационный код заказчика": \["7701234567"]
   },
-  "regions": [
+  "analytics": {
+    "Условия оплаты: аванс, процент, сумма, сроки перечисления": \[
+      "Покупатель обязуется перечислить аванс в размере 30% в течение 5 рабочих дней."
+    ]
+  },
+  "regions": \[
     {
       "category": "ФИО директора, подписантов и ответственных сотрудников",
       "value": "Иванов И.И.",
@@ -70,47 +193,25 @@ curl -X POST http://localhost:8000/extract-pdf \
       "y": 340.2,
       "width": 78.4,
       "height": 11.2
-    },
-    {
-      "category": "ИНН, КПП и идентификационный код заказчика",
-      "value": "7701234567",
-      "page": 1,
-      "x": 200.0,
-      "y": 410.8,
-      "width": 62.1,
-      "height": 11.2
     }
   ]
 }
 ```
 
-`regions` рассчитывается **не самим GigaChat** (у него нет доступа к
-разметке PDF), а локально: сервер повторно открывает загруженный PDF через
-PyMuPDF и ищет на странице точное вхождение каждого значения, которое
-GigaChat уже нашёл в тексте. Поэтому:
-- работает только для `.pdf` (у `.docx` нет фиксированной геометрии страниц — для него `regions` всегда `[]`);
-- для сканов/PDF без текстового слоя `regions` тоже будет пустым (нет текста для поиска — в таком случае имеет смысл сначала прогнать OCR);
-- если GigaChat слегка изменил словоформу значения, оно может не найтись точным поиском и просто не попадёт в `regions` (при этом в `categories` останется).
+**Поля:**
 
-Word документ тоже поддерживается через тот же маршрут (только без `regions`):
-```bash
-curl -X POST http://localhost:8000/extract-pdf \
-  -F "file=@Dogovor.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-# {"categories":{...}, "regions":[]}
-```
+|Поле|Описание|
+|-|-|
+|`categories`|Отдельные реквизиты/значения по фиксированному списку категорий|
+|`analytics`|Дословные цитаты по условиям оплаты, расторжению, гарантии, приёмке, 223-ФЗ/44-ФЗ/275-ФЗ|
+|`regions`|Координаты (в points, top-left origin) каждого найденного значения на странице PDF|
 
-## Переменные окружения
+**Особенности `regions`:**
 
-| Переменная             | Описание                              | По умолчанию                     |
-|------------------------|---------------------------------------|----------------------------------|
-| `GIGACHAT_CLIENT_ID`   | ID клиента из кабинета разработчика   | (обязательно)                    |
-| `GIGACHAT_CLIENT_SECRET`| Секретный ключ клиента               | (обязательно)                    |
-| `GIGACHAT_SCOPE`       | OAuth scope                           | `GIGACHAT_API_PERS`              |
-| `HOST`                 | Адрес привязки сервера                | `0.0.0.0`                        |
-| `PORT`                 | Порт сервера                          | `8000`                           |
+* рассчитывается **не GigaChat**, а локально — сервер повторно открывает
+PDF через PyMuPDF и ищет точное вхождение каждого значения;
+* работает только для `.pdf` — для `.docx` всегда `\[]`;
+* для сканов без текстового слоя тоже будет `\[]` (нужен OCR заранее);
+* если GigaChat немного изменил словоформу значения, оно может не найтись
+точным поиском и просто не попадёт в `regions` (при этом останется в `categories`).
 
-## Получить credentials
-
-1. Зарегистрируйся на [developers.sber.ru](https://developers.sber.ru/gigachat)
-2. Создай приложение в разделе **API**
-3. Скопируй `client_id` и `client_secret` в `.env`
