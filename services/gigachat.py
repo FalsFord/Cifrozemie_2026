@@ -1,3 +1,10 @@
+"""GigaChat API client and document (PDF/DOCX) category extraction logic.
+
+This module wraps the GigaChat OAuth/chat HTTP API, defines the fixed
+list of extraction categories used across the application, and provides
+a local regex-based fallback extractor for when GigaChat is unavailable.
+"""
+
 import httpx
 import uuid
 import json
@@ -273,8 +280,20 @@ class GigaChatService:
         # предложения), найденные по ключевым словам. Это резервный путь,
         # используемый только если GigaChat недоступен или вернул пустой ответ.
         def sentences_with_keywords(source_text: str, keywords: list[str]) -> list[str]:
-            # Split roughly by sentence/clause terminators used in contracts
-            # (also treats numbered clauses like "5.1." as natural breaks).
+            """Return sorted unique sentences/clauses containing any keyword.
+
+            Splits ``source_text`` roughly by sentence/clause terminators
+            used in contracts (also treats numbered clauses like "5.1."
+            as natural breaks), then keeps only the chunks whose lowercased
+            text contains at least one of ``keywords``.
+
+            Args:
+                source_text: Full document text to scan.
+                keywords: Lowercase substrings to match within each chunk.
+
+            Returns:
+                Sorted list of unique matching chunks (stripped).
+            """
             chunks = re.split(r"(?<=[.!?;])\s+|\n+", source_text)
             found = []
             for chunk in chunks:

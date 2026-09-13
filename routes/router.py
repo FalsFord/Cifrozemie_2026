@@ -1,3 +1,10 @@
+"""API routes for the GigaChat FastAPI application.
+
+Exposes a health check, a plain-text question/answer endpoint, and a
+document (PDF/DOCX) upload endpoint that extracts structured category
+data from the uploaded file via GigaChat.
+"""
+
 import json
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from config import settings
