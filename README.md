@@ -6,7 +6,7 @@
 парсер, если GigaChat недоступен.
 
 <p>
-  <img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-blue">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115%2B-009688">
   <img alt="License" src="https://img.shields.io/badge/license-proprietary-lightgrey">
 </p>
